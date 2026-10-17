@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <AssemblyName>SpireTermsProbe</AssemblyName>
+    <RootNamespace>SpireTermsProbe</RootNamespace>
+    <!-- Override with: dotnet build -p:STS2GamePath="...\data_sts2_windows_x86_64" -->
+    <STS2GamePath Condition="'$(STS2GamePath)' == ''">D:\Steam\steamapps\common\Slay the Spire 2\data_sts2_windows_x86_64</STS2GamePath>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="sts2">
+      <HintPath>$(STS2GamePath)\sts2.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GodotSharp">
+      <HintPath>$(STS2GamePath)\GodotSharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

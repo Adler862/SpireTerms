@@ -1,0 +1,13 @@
+# extracted game tables (large, regenerable)
+_game/
+
+# build output
+dist/
+
+# python
+__pycache__/
+*.pyc
+
+# dotnet probe
+probe/bin/
+probe/obj/
