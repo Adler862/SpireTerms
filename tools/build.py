@@ -46,6 +46,8 @@ DEFAULT_PCK = os.environ.get(
     "STS2_PCK", r"D:\Steam\steamapps\common\Slay the Spire 2\SlayTheSpire2.pck"
 )
 
+MOD_VERSION = "0.3.0"
+
 # Tables whose ``.title`` keys describe a term the player can meet in card text.
 POOL_TABLES = (
     "cards",
@@ -126,6 +128,11 @@ def is_text_field(table: str, field: str) -> bool:
     return field in TEXT_FIELDS.get(table, ()) or field.endswith("Prompt")
 
 
+# Tables the build emits, in order. Adding one is a one-line change here plus a
+# row in TEXT_FIELDS.
+TABLE_TARGETS = tuple(TEXT_FIELDS)
+
+
 def is_title_field(field: str) -> bool:
     """`打击.title`, `DINGY_DAGGER.title.dingy`, `SEA_GLASS.DEFECT.title`."""
     return field == "title" or field.startswith("title.") or field.endswith(".title")
@@ -152,8 +159,17 @@ def load_tables(root: Path, lang: str) -> dict[str, dict]:
     return out
 
 
+SOURCE_STAMP = "_source.json"
+
+
 def extract_tables(pck_path: str, root: Path) -> None:
+    """Mirror every localization table out of the pck, dropping what is gone.
+
+    A table removed by a patch must not linger: the old file would keep feeding
+    its ``.title`` names into the glossary after the game stopped using them.
+    """
     with Pck(pck_path) as pck:
+        written: set[Path] = set()
         for entry in pck.entries:
             parts = entry.path.split("/")
             if (
@@ -163,7 +179,27 @@ def extract_tables(pck_path: str, root: Path) -> None:
                 or len(parts[1]) != 3
             ):
                 continue
-            pck.extract(entry, root / parts[1] / parts[2])
+            dest = root / parts[1] / parts[2]
+            pck.extract(entry, dest)
+            written.add(dest)
+
+        for lang_dir in (p for p in root.iterdir() if p.is_dir()) if root.exists() else []:
+            for stale in lang_dir.glob("*.json"):
+                if stale not in written:
+                    stale.unlink()
+
+    (root / SOURCE_STAMP).write_text(
+        json.dumps({"version": game_version(pck_path), "tables": len(written)}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+
+def snapshot_version(root: Path) -> str:
+    try:
+        return json.loads((root / SOURCE_STAMP).read_text(encoding="utf-8")).get("version", "")
+    except (OSError, ValueError, AttributeError):
+        return ""
+
 
 
 def build_glossary(zh: dict[str, dict], en: dict[str, dict]) -> Glossary:
@@ -320,6 +356,22 @@ def build_table(table: str, source: dict[str, str], english: dict[str, str],
     return out
 
 
+def write_zip(dest: Path, mod_dir: Path, names: tuple[str, ...]) -> Path:
+    """Release archive, byte-stable: fixed timestamps so a rebuild is a no-op."""
+    import zipfile
+
+    epoch = (1980, 1, 1, 0, 0, 0)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    with zipfile.ZipFile(dest, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name in names:
+            data = (mod_dir / name).read_bytes()
+            info = zipfile.ZipInfo(f"{mod_dir.name}/{name}", date_time=epoch)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            zf.writestr(info, data)
+    return dest
+
+
 def game_version(pck_path: str, fallback: str = "0.0.0") -> str:
     """Version the tables were baked from, straight out of the game's own report."""
     info = Path(pck_path).with_name("release_info.json")
@@ -340,31 +392,70 @@ def main() -> int:
     args = ap.parse_args()
 
     data = Path(args.data)
-    if args.refresh or not (data / "zhs").exists():
+    live = game_version(args.pck)
+    baked = snapshot_version(data)
+    stale = bool(baked) and baked != live
+    if args.refresh or not (data / "zhs").exists() or not baked or stale:
+        if stale:
+            print(f"snapshot is {baked}, game is {live}: re-extracting tables", file=sys.stderr)
+        elif not (data / "zhs").exists() or not baked:
+            print(f"no snapshot in {data}: extracting tables from {args.pck}", file=sys.stderr)
         extract_tables(args.pck, data)
 
     zh = load_tables(data, "zhs")
     en = load_tables(data, "eng")
+    missing = [t for t in TABLE_TARGETS if t not in zh or t not in en]
+    if missing:
+        print(f"table(s) missing from the snapshot in {data}: {', '.join(missing)}"
+              " (rerun with --refresh)", file=sys.stderr)
+        return 2
     glossary = build_glossary(zh, en)
-
-    source = zh["cards"]
-    out = build_table("cards", source, en["cards"], glossary, args.ids)
-    problems = check("cards", source, out, glossary)
 
     mod_id = "SpireTerms"
     out_root = Path(args.out)
+    out_root.mkdir(parents=True, exist_ok=True)
     mod_dir = out_root / mod_id
-    cards_json = json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
 
-    # The reviewable source lives outside the mod folder: anything *.json inside a
-    # mod dir gets probed by the loader as a possible manifest (log noise).
-    (out_root / "cards.zhs.json").write_text(cards_json, encoding="utf-8")
+    built: dict[str, dict[str, str]] = {}
+    payload: dict[str, bytes] = {}
+    problems: list[str] = []
+    for table in TABLE_TARGETS:
+        source = zh[table]
+        out = build_table(table, source, en[table], glossary,
+                          args.ids if table == "cards" else None)
+        problems += check(table, source, out, glossary)
+        text = json.dumps(out, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+        # The reviewable source lives outside the mod folder: anything *.json
+        # inside a mod dir gets probed by the loader as a possible manifest.
+        (out_root / f"{table}.zhs.json").write_text(text, encoding="utf-8")
+        payload[f"{mod_id}/localization/zhs/{table}.json"] = text.encode("utf-8")
+        built[table] = out
 
-    relic_source = zh["relics"]
-    relics = build_table("relics", relic_source, en["relics"], glossary)
-    problems += check("relics", relic_source, relics, glossary)
-    relics_json = json.dumps(relics, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
-    (out_root / "relics.zhs.json").write_text(relics_json, encoding="utf-8")
+    src_by = collections.Counter(glossary.source.values())
+    lines = [
+        f"glossary terms: {len(glossary.terms)}  by source: {dict(src_by)}",
+        f"problems: {len(problems)}",
+    ]
+    summary = list(lines)
+    summary += [f"  ! {p}" for p in problems[:20]]
+    for table, out in built.items():
+        ids = {key.split(".", 1)[0] for key in out}
+        texts = {key for key in out if not is_title_field(key.partition(".")[2])}
+        summary.append(f"{table}: {len(ids)} entries, {len(out)} keys, {len(texts)} text keys")
+        lines.append("")
+        lines.append(f"{table}: {len(ids)} entries, {len(out)} keys, {len(texts)} text keys")
+        for key in sorted(out):
+            if is_title_field(key.partition(".")[2]):
+                lines.append(f"  {key} -> {out[key]}")
+    print("\n".join(summary))
+    if args.report:
+        Path(args.report).write_text("\n".join(lines), encoding="utf-8")
+
+    if problems:
+        # A build that breaks an invariant is exactly how the 0.1.0 text shipped
+        # raw placeholders. Leave the last good dist alone instead of replacing it.
+        print("refusing to write dist: fix the problems above", file=sys.stderr)
+        return 1
 
     # A mod's localization only merges when it ships inside a PCK whose paths are
     # prefixed with the mod id (verified against v0.111.0).
@@ -376,25 +467,19 @@ def main() -> int:
 
         shutil.rmtree(stale_flat)
 
-    mod_version = game_version(args.pck)
+    mod_version = live
     if mod_version == "0.0.0":
         print("warning: release_info.json not found next to the pck, min_game_version unset",
               file=sys.stderr)
 
-    write_pck(
-        mod_dir / f"{mod_id}.pck",
-        {
-            f"{mod_id}/localization/zhs/cards.json": cards_json.encode("utf-8"),
-            f"{mod_id}/localization/zhs/relics.json": relics_json.encode("utf-8"),
-        },
-    )
+    write_pck(mod_dir / f"{mod_id}.pck", payload)
     (mod_dir / f"{mod_id}.json").write_text(
         json.dumps(
             {
                 "id": mod_id,
                 "name": "SpireTerms - 卡牌遗物术语中英对照",
                 "author": "SpireTerms",
-                "version": "0.3.0",
+                "version": MOD_VERSION,
                 "description": "卡牌与遗物的名称双写、关键词英文标注。纯本地化覆盖，无代码。",
                 "min_game_version": mod_version,
                 "has_pck": True,
@@ -409,26 +494,8 @@ def main() -> int:
         encoding="utf-8",
     )
 
-    src_by = collections.Counter(glossary.source.values())
-    lines = [
-        f"glossary terms: {len(glossary.terms)}  by source: {dict(src_by)}",
-        f"problems: {len(problems)}",
-    ]
-    summary = list(lines)
-    summary += [f"  ! {p}" for p in problems[:20]]
-    for table, built in (("cards", out), ("relics", relics)):
-        ids = {key.split(".", 1)[0] for key in built}
-        texts = {key for key in built if not is_title_field(key.partition(".")[2])}
-        summary.append(f"{table}: {len(ids)} entries, {len(built)} keys, {len(texts)} text keys")
-        lines.append("")
-        lines.append(f"{table}: {len(ids)} entries, {len(built)} keys, {len(texts)} text keys")
-        for key in sorted(built):
-            if is_title_field(key.partition(".")[2]):
-                lines.append(f"  {key} -> {built[key]}")
-    print("\n".join(summary))
-    if args.report:
-        Path(args.report).write_text("\n".join(lines), encoding="utf-8")
-    return 1 if problems else 0
+    write_zip(out_root / f"{mod_id}.zip", mod_dir, ("SpireTerms.json", f"{mod_id}.pck"))
+    return 0
 
 
 if __name__ == "__main__":

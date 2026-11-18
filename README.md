@@ -61,11 +61,14 @@ python tools/build.py --out dist
 ```
 dist/SpireTerms/SpireTerms.json     # mod 清单（has_pck=true）
 dist/SpireTerms/SpireTerms.pck      # 本地化覆盖，内含 cards.json 与 relics.json
+dist/SpireTerms.zip                 # 发布包，构建时直接生成
 dist/cards.zhs.json                 # 打包源文件，方便 review，不进 mod 目录
 dist/relics.zhs.json
 ```
 
 默认读 `D:\Steam\steamapps\common\Slay the Spire 2\SlayTheSpire2.pck`，也可以用环境变量 `STS2_PCK` 或 `--pck` 指定。
+
+`_game/` 是 pck 的本地快照，带版本戳 `_game/_source.json`。游戏更新后第一次构建会自动重提取，不用记得加 `--refresh`。快照过期又不重提取，就是 0.1.0 那次事故的成因。
 
 ### 为什么是 PCK
 
@@ -91,7 +94,9 @@ v0.111.0 实测：扁平放在 `mods/<Mod>/localization/` 不会被合并，load
 
 表达式那条不能靠花括号配平代替。`{IfUpgraded:show:[gold]升级过的[/gold]}` 里插进 ` (Upgraded)`，括号照样配平，但游戏解析不了这个变量，卡面就显示原始文本。
 
-`tools/drift.py` 按表对比产物和当前游戏版本，报告新增 key、消失 key、措辞变化、变量对不上，判断这版还能不能发。`vars` 那一列就是会显示裸占位符的条目。
+有不变式不过，构建会停在这一步，不覆盖 `dist/` 里上一份能用的产物。`dist/*.zhs.json` 照样写出来，方便对。
+
+`tools/drift.py` 按表对比产物和当前游戏版本，报告新增 key、消失 key、措辞变化、变量对不上、名称被改过，判断这版还能不能发。`vars` 那一列就是会显示裸占位符的条目，`titles` 那一列是名字已经换了、产物还留着旧名的条目。
 
 ## 许可
 

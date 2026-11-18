@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-from build import is_text_field, top_level_expressions  # noqa: E402
+from build import is_text_field, is_title_field, top_level_expressions  # noqa: E402
 from pck import Pck  # noqa: E402
 
 DEFAULT_PCK = os.environ.get(
@@ -73,6 +73,7 @@ def compare(table: str, game: dict[str, str], built: dict[str, str]) -> tuple[in
     changed = []
     bad_format = []
     vars_gone = []
+    retitled = []
 
     for key, value in built.items():
         if key.count("{") != key.count("}"):
@@ -80,20 +81,25 @@ def compare(table: str, game: dict[str, str], built: dict[str, str]) -> tuple[in
         original = game.get(key)
         if original is None:
             continue
-        if is_text_field(table, key.partition(".")[2]) and strip_annotation(value) != original:
+        field = key.partition(".")[2]
+        if is_text_field(table, field) and strip_annotation(value) != original:
             changed.append(key)
+        if is_title_field(field) and value != original and not value.startswith(original + " / "):
+            # The build holds a name the game no longer uses.
+            retitled.append(key)
         if top_level_expressions(value) != top_level_expressions(original):
             vars_gone.append(key)
 
     print(f"[{table}] game {len(game)} / build {len(built)}  stale {len(stale)}  "
           f"missing {len(missing)}  changed {len(changed)}  vars {len(vars_gone)}  "
-          f"bad format {len(bad_format)}")
+          f"titles {len(retitled)}  bad format {len(bad_format)}")
 
     for label, items in (
         ("stale", stale),
         ("missing", missing),
         ("changed", changed),
         ("vars", vars_gone),
+        ("titles", retitled),
         ("bad", bad_format),
     ):
         for key in items[:10]:
@@ -101,7 +107,7 @@ def compare(table: str, game: dict[str, str], built: dict[str, str]) -> tuple[in
         if len(items) > 10:
             print(f"  {label}: ... {len(items) - 10} more")
 
-    return len(changed) + len(vars_gone) + len(bad_format), missing
+    return len(changed) + len(vars_gone) + len(retitled) + len(bad_format), missing
 
 
 def main() -> int:
