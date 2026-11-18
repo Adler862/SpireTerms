@@ -46,7 +46,7 @@ DEFAULT_PCK = os.environ.get(
     "STS2_PCK", r"D:\Steam\steamapps\common\Slay the Spire 2\SlayTheSpire2.pck"
 )
 
-MOD_VERSION = "0.3.0"
+MOD_VERSION = "0.3.1"
 
 # Tables whose ``.title`` keys describe a term the player can meet in card text.
 POOL_TABLES = (
@@ -71,8 +71,8 @@ MANUAL = {
     "牌组": "Deck",
     "最大生命值": "Max HP",
     "充能球": "Orb",
-    "冰霜充能球": "Frost Orb",
-    "升级": "Upgraded",
+    "冰霜充能球": "Frost",
+    "升级": "Upgrade",
     "升级过": "Upgraded",
     "升级过的": "Upgraded",
     "稀有": "Rare",
@@ -83,12 +83,12 @@ MANUAL = {
     "个黑暗": "Dark",
     "生成过": "Channeled",
     "激发闪电": "Evoke Lightning",
-    # Relic text names things no table titles: the game writes "Enchant",
-    # "Potions", "Act" in its own English, so these follow that spelling.
-    "遗物": "Relics",
+    # Relic text names things no table titles. Spell them the way the game does,
+    # in the dictionary form, so `3 件遗物 (Relic)` works after a count too.
+    "遗物": "Relic",
     "蜡制遗物": "Wax Relic",
     "附魔": "Enchant",
-    "药水": "Potions",
+    "药水": "Potion",
     "变化": "Transform",
     "休息": "Rest",
     "休息处": "Rest Site",
@@ -97,6 +97,19 @@ MANUAL = {
     "先古牌": "Ancient Card",
     "稀有牌": "Rare Card",
     "多人游戏牌": "Multiplayer Cards",
+}
+
+# Terms whose English depends on the text around the span. 升级 is a verb in
+# `随机[gold]升级[/gold]3 张牌` (Upgrade) and an adjective in `已[gold]升级[/gold]的`
+# (Upgraded); 附魔 works the same way. Picking one form everywhere gets the other
+# kind wrong, which tools/audit.py makes visible.
+POSTFIX = {
+    "升级": {"过": "Upgraded", "的": "Upgraded"},
+    "附魔": {"的": "Enchanted"},
+}
+
+PREV = {
+    "附魔": {"被": "Enchanted"},
 }
 
 SKIP_TERMS = {"?", ""}
@@ -296,22 +309,44 @@ def annotate_description(text: str, glossary: Glossary) -> str:
         # expression itself, which the game then refuses to resolve.
         if depth[match.start()] > 0 or HAS_EXPR.search(inner):
             return match.group(0)
-        english = glossary.get(inner)
-        if not english or english == inner or inner.isascii():
+        if not inner or inner.isascii():
             # `[gold]Boss[/gold]`: the span is already the English word.
+            return match.group(0)
+        english = None
+        if inner in PREV:
+            before = text[max(0, match.start() - 1) : match.start()]
+            english = PREV[inner].get(before)
+        if english is None and inner in POSTFIX:
+            following = text[match.end() : match.end() + 1]
+            english = POSTFIX[inner].get(following)
+        english = english or glossary.get(inner)
+        if not english or english == inner:
             return match.group(0)
         return f"[gold]{inner} ({english})[/gold]"
 
     return SPAN_RE.sub(repl, text)
 
 
-def strip_annotation(text: str, glossary: Glossary) -> str:
+def annotation_suffixes(glossary: Glossary) -> dict[str, set[str]]:
+    """` (English)` suffix -> every Chinese term that can produce it."""
+    suffixes: dict[str, set[str]] = {}
+    for term, english in glossary.terms.items():
+        suffixes.setdefault(f" ({english})", set()).add(term)
+    for term, by_following in POSTFIX.items():
+        for english in by_following.values():
+            suffixes.setdefault(f" ({english})", set()).add(term)
+    for term, by_before in PREV.items():
+        for english in by_before.values():
+            suffixes.setdefault(f" ({english})", set()).add(term)
+    return suffixes
+
+
+def strip_annotation(text: str, suffixes: dict[str, set[str]]) -> str:
     def repl(match: re.Match[str]) -> str:
         inner = match.group(1)
-        for term, english in glossary.terms.items():
-            suffix = f" ({english})"
-            if inner.endswith(suffix) and inner[: -len(suffix)] == term:
-                return f"[gold]{term}[/gold]"
+        for suffix, terms in suffixes.items():
+            if inner.endswith(suffix) and inner[: -len(suffix)] in terms:
+                return f"[gold]{inner[: -len(suffix)]}[/gold]"
         return match.group(0)
 
     return SPAN_RE.sub(repl, text)
@@ -320,13 +355,14 @@ def strip_annotation(text: str, glossary: Glossary) -> str:
 def check(table: str, source: dict[str, str], built: dict[str, str],
           glossary: Glossary) -> list[str]:
     problems: list[str] = []
+    suffixes = annotation_suffixes(glossary)
     for key, value in built.items():
         original = source.get(key)
         if original is None:
             problems.append(f"{key}: not in official zhs table")
             continue
         if is_text_field(table, key.rsplit(".", 1)[-1]):
-            roundtrip = strip_annotation(value, glossary)
+            roundtrip = strip_annotation(value, suffixes)
             if roundtrip != original:
                 problems.append(f"{key}: not reversible")
         if value.count("{") != value.count("}"):
