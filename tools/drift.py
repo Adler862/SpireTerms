@@ -44,7 +44,7 @@ def read_table(pck_path: str, table: str, mod_prefix: str = "") -> dict[str, str
     with Pck(pck_path) as pck:
         try:
             entry = pck.one(path)
-        except KeyError:
+        except LookupError:
             return {}
         return json.loads(pck.read(entry).decode("utf-8"))
 

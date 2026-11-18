@@ -1,4 +1,7 @@
-"""Build zh->en bilingual card localization overrides for Slay the Spire 2.
+"""Build zh->en bilingual localization overrides for Slay the Spire 2.
+
+Covers the ``cards`` and ``relics`` tables: names get ``中文 / English``, prose
+fields get ``[gold]中文 (English)[/gold]`` on keyword spans only.
 
 Pipeline
 --------
@@ -8,8 +11,9 @@ Pipeline
      languages of the same card description (official parallel text).
    * ``table``    - reverse lookup of ``.title`` keys across every localization
      table (zero collisions in practice).
-   * ``manual``   - a short curated list for terms that no table defines
-     (zones like 手牌 / 抽牌堆) or where the learned mapping is context-wrong.
+   * ``manual``   - a curated list for terms no table defines (zones like
+     手牌 / 抽牌堆, relic-text verbs like 附魔 / 阶段) or where the learned
+     mapping is context-wrong.
 3. Emit overrides that keep the Chinese text byte-identical and only *insert*
    English, so the result is reversible and machine-checkable.
 
