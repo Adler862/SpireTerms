@@ -14,3 +14,7 @@ probe/obj/
 
 # local build scratch
 _backup/
+
+# release tools scratch
+_tmp_*
+*.pem
