@@ -11,3 +11,6 @@ __pycache__/
 # dotnet probe
 probe/bin/
 probe/obj/
+
+# local build scratch
+_backup/

@@ -15,6 +15,8 @@ Pipeline
 
 Invariants enforced by :func:`check`:
   * removing the inserted English yields the official Chinese exactly;
+  * the ordered list of top-level ``{...}`` expressions is unchanged, so the
+    game can still resolve every dynamic variable;
   * braces stay balanced and nothing is inserted inside ``{...}``;
   * only keys that exist in the official zhs table are emitted.
 """
@@ -177,11 +179,46 @@ def bilingual_title(zh_title: str, en_title: str | None) -> str:
     return f"{zh_title} / {en_title}"
 
 
+def brace_depth(text: str) -> list[int]:
+    """Depth of `{...}` nesting at each character (0 = plain prose)."""
+    depth = 0
+    out = []
+    for char in text:
+        if char == "{":
+            depth += 1
+        out.append(depth)
+        if char == "}":
+            depth -= 1
+    return out
+
+
+def top_level_expressions(text: str) -> list[str]:
+    """Every `{...}` at depth 0, in order. Nested braces stay inside their parent."""
+    out: list[str] = []
+    start = -1
+    depth = 0
+    for i, char in enumerate(text):
+        if char == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif char == "}":
+            depth -= 1
+            if depth == 0 and start >= 0:
+                out.append(text[start : i + 1])
+    return out
+
+
 def annotate_description(text: str, glossary: Glossary) -> str:
+    depth = brace_depth(text)
+
     def repl(match: re.Match[str]) -> str:
         inner = match.group(1)
-        if HAS_EXPR.search(inner):
-            return match.group(0)  # never touch SmartFormat expressions
+        # A gold span can sit inside a SmartFormat branch, e.g.
+        # `{IfUpgraded:show:[gold]升级过的[/gold]}`. Inserting there changes the
+        # expression itself, which the game then refuses to resolve.
+        if depth[match.start()] > 0 or HAS_EXPR.search(inner):
+            return match.group(0)
         english = glossary.get(inner)
         if not english:
             return match.group(0)
@@ -217,6 +254,8 @@ def check(source: dict[str, str], built: dict[str, str], glossary: Glossary) -> 
             problems.append(f"{key}: unbalanced braces")
         if "{ " in value or " }" in value:
             problems.append(f"{key}: stray brace spacing")
+        if top_level_expressions(value) != top_level_expressions(original):
+            problems.append(f"{key}: expression changed")
     return problems
 
 
@@ -227,13 +266,24 @@ def build(source: dict[str, str], english: dict[str, str], glossary: Glossary,
         card_id, _, field = key.partition(".")
         if ids is not None and card_id not in ids:
             continue
-        if field == "title":
+        if field == "title" or field.startswith("title."):
+            # `DINGY_DAGGER.title.dingy` and friends: a card can carry several
+            # selectable names, each keyed under its own variant suffix.
             out[key] = bilingual_title(text, english.get(key))
         elif is_text_field(field):
             out[key] = annotate_description(text, glossary)
         else:
             continue
     return out
+
+
+def game_version(pck_path: str, fallback: str = "0.0.0") -> str:
+    """Version the tables were baked from, straight out of the game's own report."""
+    info = Path(pck_path).with_name("release_info.json")
+    try:
+        return json.loads(info.read_text(encoding="utf-8"))["version"].lstrip("v")
+    except (OSError, ValueError, KeyError, TypeError):
+        return fallback
 
 
 def main() -> int:
@@ -277,6 +327,11 @@ def main() -> int:
 
         shutil.rmtree(stale_flat)
 
+    mod_version = game_version(args.pck)
+    if mod_version == "0.0.0":
+        print("warning: release_info.json not found next to the pck, min_game_version unset",
+              file=sys.stderr)
+
     write_pck(
         mod_dir / f"{mod_id}.pck",
         {f"{mod_id}/localization/zhs/cards.json": cards_json.encode("utf-8")},
@@ -287,9 +342,9 @@ def main() -> int:
                 "id": mod_id,
                 "name": "SpireTerms - 卡牌术语中英对照",
                 "author": "SpireTerms",
-                "version": "0.1.0",
+                "version": "0.2.0",
                 "description": "卡名双写 + 关键词英文标注。纯本地化覆盖，无代码。",
-                "min_game_version": "0.111.0",
+                "min_game_version": mod_version,
                 "has_pck": True,
                 "has_dll": False,
                 "affects_gameplay": False,

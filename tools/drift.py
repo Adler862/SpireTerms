@@ -8,6 +8,9 @@ Answers "can I still ship this build?" without rebuilding:
   changed    keys whose official Chinese text differs from what was baked in —
              these are the dangerous ones, because the override ships the old
              wording for both languages
+  vars       keys whose `{...}` placeholders no longer match the game's. The
+             card renders the raw placeholder text when a dynamic variable is
+             gone or renamed, which is what a player actually sees
   format     baked strings that no longer pass a brace-balance check
 """
 
@@ -20,6 +23,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+from build import top_level_expressions  # noqa: E402
 from pck import Pck  # noqa: E402
 
 DEFAULT_PCK = os.environ.get(
@@ -66,6 +70,7 @@ def main() -> int:
     missing = sorted(set(game) - set(built))
     changed = []
     bad_format = []
+    vars_gone = []
 
     for key, value in built.items():
         if key.count("{") != key.count("}"):
@@ -75,21 +80,30 @@ def main() -> int:
             continue
         if key.endswith(".description") and strip_annotation(value) != original:
             changed.append(key)
+        if top_level_expressions(value) != top_level_expressions(original):
+            vars_gone.append(key)
 
     print(f"game keys   : {len(game)}")
     print(f"build keys  : {len(built)}")
     print(f"stale       : {len(stale)}")
     print(f"missing     : {len(missing)}")
     print(f"changed     : {len(changed)}")
+    print(f"vars        : {len(vars_gone)}")
     print(f"bad format  : {len(bad_format)}")
 
-    for label, items in (("stale", stale), ("missing", missing), ("changed", changed), ("bad", bad_format)):
+    for label, items in (
+        ("stale", stale),
+        ("missing", missing),
+        ("changed", changed),
+        ("vars", vars_gone),
+        ("bad", bad_format),
+    ):
         for key in items[:10]:
             print(f"  {label}: {key}")
         if len(items) > 10:
             print(f"  {label}: ... {len(items) - 10} more")
 
-    return 1 if (changed or bad_format) else 0
+    return 1 if (changed or vars_gone or bad_format) else 0
 
 
 if __name__ == "__main__":
