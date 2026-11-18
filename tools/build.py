@@ -70,11 +70,27 @@ MANUAL = {
     "升级过": "Upgraded",
     "升级过的": "Upgraded",
     "稀有": "Rare",
+    "普通": "Common",
+    "罕见": "Uncommon",
     "能力": "Power",
     "攻击牌": "Attack",
     "个黑暗": "Dark",
     "生成过": "Channeled",
     "激发闪电": "Evoke Lightning",
+    # Relic text names things no table titles: the game writes "Enchant",
+    # "Potions", "Act" in its own English, so these follow that spelling.
+    "遗物": "Relics",
+    "蜡制遗物": "Wax Relic",
+    "附魔": "Enchant",
+    "药水": "Potions",
+    "变化": "Transform",
+    "休息": "Rest",
+    "休息处": "Rest Site",
+    "阶段": "Act",
+    "先古": "Ancient",
+    "先古牌": "Ancient Card",
+    "稀有牌": "Rare Card",
+    "多人游戏牌": "Multiplayer Cards",
 }
 
 SKIP_TERMS = {"?", ""}
@@ -82,12 +98,33 @@ SKIP_TERMS = {"?", ""}
 TRUST_MIN = 2
 TRUST_RATIO = 0.8
 
-# Card fields that carry player-visible prose and may embed keywords.
-CARD_TEXT_FIELDS = ("description", "selectionScreenPrompt", "discardSelectionPrompt")
+# Fields that carry player-visible prose and may embed keywords. `flavor` is
+# deliberately absent: it is lore, not rules text, and annotating it would put
+# English inside a sentence the player reads for atmosphere.
+TEXT_FIELDS = {
+    "cards": ("description", "selectionScreenPrompt", "discardSelectionPrompt"),
+    "relics": (
+        "description",
+        "eventDescription",
+        "selectionScreenPrompt",
+        "infoText",
+        "historyEntry",
+        "additionalRestSiteHealText",
+        "readyToEvolve",
+        "waxRelicPrefix",
+        "approval",
+        "warning",
+    ),
+}
 
 
-def is_text_field(field: str) -> bool:
-    return field in CARD_TEXT_FIELDS or field.endswith("Prompt")
+def is_text_field(table: str, field: str) -> bool:
+    return field in TEXT_FIELDS.get(table, ()) or field.endswith("Prompt")
+
+
+def is_title_field(field: str) -> bool:
+    """`打击.title`, `DINGY_DAGGER.title.dingy`, `SEA_GLASS.DEFECT.title`."""
+    return field == "title" or field.startswith("title.") or field.endswith(".title")
 
 
 @dataclass
@@ -220,7 +257,8 @@ def annotate_description(text: str, glossary: Glossary) -> str:
         if depth[match.start()] > 0 or HAS_EXPR.search(inner):
             return match.group(0)
         english = glossary.get(inner)
-        if not english:
+        if not english or english == inner or inner.isascii():
+            # `[gold]Boss[/gold]`: the span is already the English word.
             return match.group(0)
         return f"[gold]{inner} ({english})[/gold]"
 
@@ -239,14 +277,15 @@ def strip_annotation(text: str, glossary: Glossary) -> str:
     return SPAN_RE.sub(repl, text)
 
 
-def check(source: dict[str, str], built: dict[str, str], glossary: Glossary) -> list[str]:
+def check(table: str, source: dict[str, str], built: dict[str, str],
+          glossary: Glossary) -> list[str]:
     problems: list[str] = []
     for key, value in built.items():
         original = source.get(key)
         if original is None:
             problems.append(f"{key}: not in official zhs table")
             continue
-        if is_text_field(key.rsplit(".", 1)[-1]):
+        if is_text_field(table, key.rsplit(".", 1)[-1]):
             roundtrip = strip_annotation(value, glossary)
             if roundtrip != original:
                 problems.append(f"{key}: not reversible")
@@ -259,18 +298,18 @@ def check(source: dict[str, str], built: dict[str, str], glossary: Glossary) -> 
     return problems
 
 
-def build(source: dict[str, str], english: dict[str, str], glossary: Glossary,
-          ids: list[str] | None = None) -> dict[str, str]:
+def build_table(table: str, source: dict[str, str], english: dict[str, str],
+                glossary: Glossary, ids: list[str] | None = None) -> dict[str, str]:
     out: dict[str, str] = {}
     for key, text in source.items():
-        card_id, _, field = key.partition(".")
-        if ids is not None and card_id not in ids:
+        entry_id, _, field = key.partition(".")
+        if ids is not None and entry_id not in ids:
             continue
-        if field == "title" or field.startswith("title."):
-            # `DINGY_DAGGER.title.dingy` and friends: a card can carry several
-            # selectable names, each keyed under its own variant suffix.
+        if is_title_field(field):
+            # `DINGY_DAGGER.title.dingy`, `SEA_GLASS.DEFECT.title`: one card can
+            # carry several selectable names, each under its own key.
             out[key] = bilingual_title(text, english.get(key))
-        elif is_text_field(field):
+        elif is_text_field(table, field):
             out[key] = annotate_description(text, glossary)
         else:
             continue
@@ -305,8 +344,8 @@ def main() -> int:
     glossary = build_glossary(zh, en)
 
     source = zh["cards"]
-    out = build(source, en["cards"], glossary, args.ids)
-    problems = check(source, out, glossary)
+    out = build_table("cards", source, en["cards"], glossary, args.ids)
+    problems = check("cards", source, out, glossary)
 
     mod_id = "SpireTerms"
     out_root = Path(args.out)
@@ -316,6 +355,12 @@ def main() -> int:
     # The reviewable source lives outside the mod folder: anything *.json inside a
     # mod dir gets probed by the loader as a possible manifest (log noise).
     (out_root / "cards.zhs.json").write_text(cards_json, encoding="utf-8")
+
+    relic_source = zh["relics"]
+    relics = build_table("relics", relic_source, en["relics"], glossary)
+    problems += check("relics", relic_source, relics, glossary)
+    relics_json = json.dumps(relics, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+    (out_root / "relics.zhs.json").write_text(relics_json, encoding="utf-8")
 
     # A mod's localization only merges when it ships inside a PCK whose paths are
     # prefixed with the mod id (verified against v0.111.0).
@@ -334,16 +379,19 @@ def main() -> int:
 
     write_pck(
         mod_dir / f"{mod_id}.pck",
-        {f"{mod_id}/localization/zhs/cards.json": cards_json.encode("utf-8")},
+        {
+            f"{mod_id}/localization/zhs/cards.json": cards_json.encode("utf-8"),
+            f"{mod_id}/localization/zhs/relics.json": relics_json.encode("utf-8"),
+        },
     )
     (mod_dir / f"{mod_id}.json").write_text(
         json.dumps(
             {
                 "id": mod_id,
-                "name": "SpireTerms - 卡牌术语中英对照",
+                "name": "SpireTerms - 卡牌遗物术语中英对照",
                 "author": "SpireTerms",
-                "version": "0.2.0",
-                "description": "卡名双写 + 关键词英文标注。纯本地化覆盖，无代码。",
+                "version": "0.3.0",
+                "description": "卡牌与遗物的名称双写、关键词英文标注。纯本地化覆盖，无代码。",
                 "min_game_version": mod_version,
                 "has_pck": True,
                 "has_dll": False,
@@ -358,21 +406,24 @@ def main() -> int:
     )
 
     src_by = collections.Counter(glossary.source.values())
-    cards = {key.split(".", 1)[0] for key in out}
     lines = [
-        f"cards: {len(cards)}   keys: {len(out)}",
         f"glossary terms: {len(glossary.terms)}  by source: {dict(src_by)}",
         f"problems: {len(problems)}",
     ]
-    lines += [f"  ! {p}" for p in problems[:20]]
-    lines.append("")
-    for key in sorted(out):
-        if key.endswith(".title"):
-            lines.append(f"{key}\n  -> {out[key]}")
-    report = "\n".join(lines)
-    print(report)
+    summary = list(lines)
+    summary += [f"  ! {p}" for p in problems[:20]]
+    for table, built in (("cards", out), ("relics", relics)):
+        ids = {key.split(".", 1)[0] for key in built}
+        texts = {key for key in built if not is_title_field(key.partition(".")[2])}
+        summary.append(f"{table}: {len(ids)} entries, {len(built)} keys, {len(texts)} text keys")
+        lines.append("")
+        lines.append(f"{table}: {len(ids)} entries, {len(built)} keys, {len(texts)} text keys")
+        for key in sorted(built):
+            if is_title_field(key.partition(".")[2]):
+                lines.append(f"  {key} -> {built[key]}")
+    print("\n".join(summary))
     if args.report:
-        Path(args.report).write_text(report, encoding="utf-8")
+        Path(args.report).write_text("\n".join(lines), encoding="utf-8")
     return 1 if problems else 0
 
 

@@ -1,8 +1,8 @@
-# SpireTerms — 杀戮尖塔 2 卡牌术语中英对照
+# SpireTerms — 杀戮尖塔 2 卡牌与遗物术语中英对照
 
 打牌的时候顺手记几个英文单词。
 
-中文一点没少，只是卡名和描述里的关键词后面多跟一个英文：`杂耍 / Juggling`、`攻击牌 (Attack)`、`手牌 (Hand)`。玩着玩着就认得了，不用专门坐下来背。
+中文一点没少，只是卡名、遗物名和描述里的关键词后面多跟一个英文：`杂耍 / Juggling`、`攻击牌 (Attack)`、`手牌 (Hand)`、`锚 / Anchor`。玩着玩着就认得了，不用专门坐下来背。
 
 ![SpireTerms 效果：杂耍 / Juggling+，描述里标了 Attack 和 Hand](docs/preview.png)
 
@@ -11,11 +11,12 @@
 | 位置 | 形式 |
 |---|---|
 | 卡名 | `磨蚀 / Abrasive` |
+| 遗物名 | `锚 / Anchor` |
 | 描述里的关键词 | `获得 1 点[gold]敏捷 (Dexterity)[/gold]。` |
 | 描述正文 | 不变 |
 | 数值、升级高亮、条件分支 | 不变（`{Damage:diff()}`、`{IfUpgraded:…}` 一个字节不动） |
 
-只标关键词，判断依据是游戏自带的词表：`powers`、`card_keywords`、`orbs`、`static_hover_tips` 里的名字，加上卡名反查。不做分词，所以「力量」这种既是指关键词又是普通用词的地方也不会标错。
+只标关键词，判断依据是游戏自带的词表：`powers`、`card_keywords`、`orbs`、`static_hover_tips` 里的名字，加上卡名和遗物名反查。不做分词，所以「力量」这种既是指关键词又是普通用词的地方也不会标错。
 
 ## 安装
 
@@ -42,7 +43,7 @@
 
 ## 已知限制
 
-- 只做卡牌（卡名 + 描述关键词）。遗物、药水、事件、对话还没做。
+- 现在做卡牌和遗物。药水、事件、对话、遗物剧情文本（`flavor`）还没做。
 - 只做简体中文（`zhs`）。
 - 没有游戏内开关，装上即生效，卸掉即还原。
 - 20 个只有英文的 key（诅咒、状态卡，比如 `DAZED`、`GREED`），中文客户端本来就没中文，跳过。
@@ -59,8 +60,9 @@ python tools/build.py --out dist
 
 ```
 dist/SpireTerms/SpireTerms.json     # mod 清单（has_pck=true）
-dist/SpireTerms/SpireTerms.pck      # 本地化覆盖
+dist/SpireTerms/SpireTerms.pck      # 本地化覆盖，内含 cards.json 与 relics.json
 dist/cards.zhs.json                 # 打包源文件，方便 review，不进 mod 目录
+dist/relics.zhs.json
 ```
 
 默认读 `D:\Steam\steamapps\common\Slay the Spire 2\SlayTheSpire2.pck`，也可以用环境变量 `STS2_PCK` 或 `--pck` 指定。
@@ -73,11 +75,11 @@ v0.111.0 实测：扁平放在 `mods/<Mod>/localization/` 不会被合并，load
 
 ## 词表怎么来的
 
-没做翻译，全部取自游戏自带的官方中英文本，一共 1364 条：
+没做翻译，全部取自游戏自带的官方中英文本，一共 1376 条：
 
-1. **官方表反查**（1312 条）：46 张本地化表的 `.title` 做 zh→en 映射，其中卡名 731 条，其余是能力、关键词、充能球、悬浮提示、遗物、药水。实测没有重名冲突。
+1. **官方表反查**（1310 条）：46 张本地化表的 `.title` 做 zh→en 映射，其中卡名 731 条，其余是能力、关键词、充能球、悬浮提示、遗物、药水。实测没有重名冲突。
 2. **平行文本学习**（35 条）：同一张卡的中英描述里，`[gold]` 片段按位置对齐，多数票（至少 2 次、占比 80% 以上）才采纳。用来抓「手牌 → Hand」「弃牌堆 → Discard Pile」这种表里没有的词。
-3. **人工修正**（17 条）：区域词和上下文有歧义的地方，比如 `升级` 要翻成 Upgraded 而不是 Upgrade。
+3. **人工修正**（31 条）：区域词和上下文有歧义的地方。一部分是词性，比如 `升级` 要翻成 Upgraded 而不是 Upgrade；另一部分是遗物文本里的通用词，`附魔`、`药水`、`阶段` 这种没有哪张表的 `.title` 会收，按游戏自己的英文写成 `Enchant`、`Potions`、`Act`。
 
 ## 校验
 
@@ -89,7 +91,7 @@ v0.111.0 实测：扁平放在 `mods/<Mod>/localization/` 不会被合并，load
 
 表达式那条不能靠花括号配平代替。`{IfUpgraded:show:[gold]升级过的[/gold]}` 里插进 ` (Upgraded)`，括号照样配平，但游戏解析不了这个变量，卡面就显示原始文本。
 
-`tools/drift.py` 用来对比产物和当前游戏版本，报告新增 key、消失 key、措辞变化、变量对不上，判断这版还能不能发。`vars` 那一列就是会显示裸占位符的卡。
+`tools/drift.py` 按表对比产物和当前游戏版本，报告新增 key、消失 key、措辞变化、变量对不上，判断这版还能不能发。`vars` 那一列就是会显示裸占位符的条目。
 
 ## 许可
 
